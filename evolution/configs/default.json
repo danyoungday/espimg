@@ -1,0 +1,23 @@
+{
+    "evolution_params": {
+        "n_generations": 100,
+        "pop_size": 100,
+        "n_elites": 10
+    },
+    "remove_population_pct": 0.8,
+    "mutation_factor": 0.1,
+    "mutation_rate": 0.1,
+    "model_params": {
+        "hidden_size": 64
+    },
+    "eval_params": {
+    },
+    "context": [
+    ],
+    "actions": [
+    ],
+    "outcomes": {
+    },
+    "save_path": "results/firsttry",
+    "seed_path": "evolution/seeding/seeds/zerocarbon"
+}
