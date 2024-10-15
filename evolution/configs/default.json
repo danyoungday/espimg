@@ -8,7 +8,9 @@
     "mutation_factor": 0.1,
     "mutation_rate": 0.1,
     "model_params": {
-        "hidden_size": 64
+        "in_size": 32,
+        "hidden_size": 64,
+        "out_size": 3
     },
     "eval_params": {
     },
@@ -17,7 +19,7 @@
     "actions": [
     ],
     "outcomes": {
+        "reward": false
     },
-    "save_path": "results/firsttry",
-    "seed_path": "evolution/seeding/seeds/zerocarbon"
+    "save_path": "results/dummy"
 }

@@ -15,8 +15,11 @@ class ImageDataset(Dataset):
     """
     Custom PyTorch dataset preprocessing our images into the format Torch wants
     """
-    def __init__(self, data_path: str):
-        self.data = np.load(data_path)
+    def __init__(self, img_data: np.ndarray):
+        """
+        img_data: (N, H, W, C) array of images
+        """
+        self.data = img_data
         self.data = torch.tensor(self.data, dtype=torch.float32)
         self.data /= 255  # Normalize to [0, 1]
         self.data = self.data.permute(0, 3, 1, 2)  # Go from NHWC to NCHW
@@ -73,7 +76,8 @@ def main():
 
     vae = VAE(config["img_size"], config["latent_dim"], config["encoder_blocks"], config["decoder_blocks"])
 
-    dataset = ImageDataset("data/CarRacing-v2/human.npy")
+    img_data = np.load("data/CarRacing-v2/human.npy")
+    dataset = ImageDataset(img_data)
 
     recons, klds = train_model(vae, dataset, 10, 64)
     torch.save(vae.state_dict(), f"models/{model_name}.pt")

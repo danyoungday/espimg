@@ -8,3 +8,9 @@ results/
 runs/
 data/
 models/
+
+*.pt
+*.npy
+*.npz
+*.csv
+*.np

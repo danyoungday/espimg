@@ -10,7 +10,8 @@ from tqdm import tqdm
 from evolution.candidate import Candidate
 from evolution.crossover.uniform_crossover import UniformCrossover
 from evolution.mutation.uniform_mutation import UniformMutation
-from evolution.evaluation.evaluator import Evaluator
+from evolution.evaluation.lstm_evaluator import LSTMEvaluator
+from evolution.evaluation.real_evaluator import RealEvaluator
 from evolution.sorting.distance_calculation.crowding_distance import CrowdingDistanceCalculator
 from evolution.sorting.nsga2_sorter import NSGA2Sorter
 from evolution.parent_selection.tournament_selector import TournamentSelector
@@ -45,10 +46,10 @@ class Evolution():
         self.sorter = NSGA2Sorter(distance_calculator)
 
         self.model_params = config["model_params"]
-        self.actions = config["actions"]
         self.outcomes = config["outcomes"]
 
-        self.evaluator = Evaluator(**config["eval_params"])
+        self.evaluator = LSTMEvaluator(n_envs=2, device="mps")
+        # self.evaluator = RealEvaluator()
 
     def make_new_pop(self, candidates: list[Candidate], n: int, gen: int) -> list[Candidate]:
         """
@@ -73,13 +74,13 @@ class Evolution():
         if self.seed_path:
             print("Seeding from ", self.seed_path)
             for seed in self.seed_path.iterdir():
-                candidate = Candidate.from_seed(seed, self.model_params, self.actions, self.outcomes)
+                candidate = Candidate.from_seed(seed, self.model_params, self.outcomes)
                 candidates.append(candidate)
 
         print("Generating random seed generation")
         i = len(candidates)
         while i < self.pop_size:
-            candidate = Candidate(f"0_{i}", [], self.model_params, self.actions, self.outcomes)
+            candidate = Candidate(f"0_{i}", [], self.model_params, self.outcomes)
             candidates.append(candidate)
             i += 1
 
@@ -129,5 +130,6 @@ class Evolution():
 
             # Record the performance of the most successful candidates
             self.record_gen_results(gen, sorted_parents)
+
 
         return sorted_parents

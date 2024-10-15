@@ -21,7 +21,6 @@ class UniformCrossover(Crossover):
         child = Candidate(cand_id,
                           [parent1.cand_id, parent2.cand_id],
                           parent1.model_params,
-                          parent1.actions,
                           parent1.outcomes)
         with torch.no_grad():
             child.model.load_state_dict(parent1.model.state_dict())

@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from evolution.candidate import Candidate
-from vae.vae import VAE
+from vae.vaemodel import VAE
 
 
 class Evaluator:

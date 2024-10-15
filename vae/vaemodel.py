@@ -43,9 +43,10 @@ class VAE(torch.nn.Module):
             act
         )
 
-    def __init__(self, img_size, latent_dim, encoder_params, decoder_params):
+    def __init__(self, img_size, latent_dim, encoder_params, decoder_params, kl_tolerance=0.5):
         super(VAE, self).__init__()
 
+        self.kl_tolerance = kl_tolerance
         self.img_size = img_size
         self.latent_dim = latent_dim
 
@@ -128,20 +129,25 @@ class VAE(torch.nn.Module):
         x_hat = self.decode(z)
         return x_hat
 
-    @staticmethod
-    def loss_function(xhat: torch.Tensor,
+    def loss_function(self,
+                      xhat: torch.Tensor,
                       x: torch.Tensor,
                       mu: torch.Tensor,
                       log_var: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Computes the VAE loss function.
-        NOTE: We should probably put in a weight for the KLD loss.
+        Uses the KL tolerance to weight the KLD loss similar to in World Models paper
+        xhat: (N, C, H, W)
+        x: (N, C, H, W)
+        mu: (N, latent_dim)
+        log_var: (N, latent_dim)
         """
         xhat_flat = xhat.view(xhat.shape[0], -1)
         x_flat = x.view(x.shape[0], -1)
-
         recons_loss = F.mse_loss(xhat_flat, x_flat, reduction="sum") / xhat_flat.shape[0]
 
-        kld_loss = torch.mean(-0.5 * torch.sum(1 + log_var - mu.pow(2) - torch.exp(log_var), dim=1), dim=0)
+        kld_loss = -0.5 * torch.sum(1 + log_var - mu.pow(2) - torch.exp(log_var), dim=1)
+        kld_loss = torch.clamp(kld_loss, min=self.kl_tolerance * self.latent_dim)
+        kld_loss = torch.mean(kld_loss)
 
         return recons_loss, kld_loss
