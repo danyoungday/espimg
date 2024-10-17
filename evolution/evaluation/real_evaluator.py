@@ -62,7 +62,6 @@ class RealEvaluator(Evaluator):
             total_reward += reward
             i += 1
             if done:
-                print(i)
                 break
         return total_reward
     
@@ -71,8 +70,8 @@ if __name__ == "__main__":
     import pandas as pd
 
     evaluator = RealEvaluator()
-    trial_name = "parlstm"
-    n_gens = 15
+    trial_name = "outerloop"
+    n_gens = 7
     results_dir = Path(f"results/{trial_name}/{n_gens}.csv")
     results_df = pd.read_csv(results_dir)
     cand_ids = results_df["cand_id"].values[:10]
@@ -80,7 +79,7 @@ if __name__ == "__main__":
         cand = Candidate.from_seed(Path(f"results/{trial_name}/{cand_id.split('_')[0]}/{cand_id}.pt"), None, None)
         cand.model.to("cpu")
         reward = 0
-        for _ in range(10):
+        for _ in range(3):
             reward += evaluator.visualize_evaluate_candidate(cand)
-        reward /= 10
+        reward /= 3
         print(cand_id, reward)

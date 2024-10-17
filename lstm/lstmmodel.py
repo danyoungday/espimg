@@ -36,8 +36,9 @@ class LSTM(torch.nn.Module):
         else:
             hout, (ht, ct) = self.lstm(inp)
 
+        # Once we have the output we need to unpack it to pass through the linear layers
         if isinstance(hout, torch.nn.utils.rnn.PackedSequence):
-            hout, _ = torch.nn.utils.rnn.pad_packed_sequence(hout, batch_first=True, padding_value=0)
+            hout, _ = torch.nn.utils.rnn.pad_packed_sequence(hout, batch_first=True)
         
         reward = self.reward_fc(hout)
         zt = self.latent_fc(hout)

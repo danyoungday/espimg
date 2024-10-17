@@ -48,7 +48,7 @@ class Evolution():
         self.model_params = config["model_params"]
         self.outcomes = config["outcomes"]
 
-        self.evaluator = LSTMEvaluator(n_envs=2, device="mps")
+        self.evaluator = LSTMEvaluator(n_steps=200, n_envs=256, device="mps", log_path=self.save_path / "rewards.txt")
         # self.evaluator = RealEvaluator()
 
     def make_new_pop(self, candidates: list[Candidate], n: int, gen: int) -> list[Candidate]:
@@ -123,13 +123,16 @@ class Evolution():
             # NOTE: The elites are also passed into the evaluation function. Make sure your
             # evaluator can handle this!
             new_parents = sorted_parents[:keep] + offspring
-            self.evaluator.evaluate_candidates(new_parents)
+            self.evaluator.evaluate_candidates(new_parents, force=True)
 
             # Set rank and distance of parents
             sorted_parents = self.sorter.sort_candidates(new_parents)
 
             # Record the performance of the most successful candidates
             self.record_gen_results(gen, sorted_parents)
+
+            # Retrain predictor on new rollouts
+            self.evaluator.retrain_lstm(sorted_parents[:keep], 10000, 200, 8)
 
 
         return sorted_parents

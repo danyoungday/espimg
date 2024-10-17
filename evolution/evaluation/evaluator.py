@@ -27,10 +27,11 @@ class Evaluator:
         """
         pass
 
-    def evaluate_candidates(self, candidates: list[Candidate]):
+    def evaluate_candidates(self, candidates: list[Candidate], force=True):
         """
-        Evaluates all candidates. Doesn't unnecessarily evaluate candidates that have already been evaluated.
+        Evaluates all candidates. Doesn't unnecessarily evaluate candidates that have already been evaluated unless
+        the force flag is set to True.
         """
         for candidate in tqdm(candidates, leave=False):
-            if len(candidate.metrics) == 0:
+            if len(candidate.metrics) == 0 or force:
                 self.evaluate_candidate(candidate)
