@@ -24,8 +24,12 @@ class LSTMDataset(Dataset):
         inputs = [torch.cat((obses, actions), dim=1) for obses, actions in zip(all_obses, all_actions)]
         self.inputs = pad_sequence(inputs, batch_first=True)
 
+        # NOTE: We clone the rewards so we don't modify the originals
+        rewards = [rollout.rewards.clone() for rollout in rollouts]
+        # Multiply all the negative rewards by 100 to be stricter
+        for r in rewards:
+            r[r < 0] *= 100
         # Preprocess rewards by converting them to Q values with decay gamma
-        rewards = [rollout.rewards for rollout in rollouts]
         rewards = [self.discount_rewards(r, gamma) for r in rewards]
         self.rewards = pad_sequence(rewards, batch_first=True)
 
@@ -37,12 +41,17 @@ class LSTMDataset(Dataset):
         Discount rewards using gamma.
         Rewards: (L, 1)
         """
+        discounted = rewards.clone()
+        shifteds = []
         for i in range(len(rewards)):
             shifted = torch.roll(rewards, -1 * i)
-            shifted[:-i] = 0
-            rewards += gamma ** i * shifted
+            shifted[-i:] = 0
+            shifteds.append(shifted)
 
-        return rewards
+        for i, shifted in enumerate(shifteds):
+            discounted += gamma ** i * shifted
+
+        return discounted
 
     def __len__(self):
         return len(self.inputs)
@@ -79,8 +88,14 @@ def train_lstm(lstm: LSTM, dataset: Dataset, epochs: int, batch_size: int, log_d
     lstm.train()
     lstm.to(device)
     mse = torch.nn.MSELoss()
-    bce = torch.nn.BCELoss()
+    # TODO: Stop hard-coding the BCE loss scaling factor
+    bce_scale = 100
+    bce = torch.nn.BCELoss(torch.tensor([bce_scale], device=device))
     optimizer = torch.optim.AdamW(lstm.parameters())
+
+    reward_losses = []
+    obs_losses = []
+    term_losses = []
     if log_dir:
         writer = SummaryWriter(log_dir)
 
@@ -92,15 +107,9 @@ def train_lstm(lstm: LSTM, dataset: Dataset, epochs: int, batch_size: int, log_d
             optimizer.zero_grad()
 
             inputs, rewards, terminateds, lengths = inputs.to(device), rewards.to(device), terminateds.to(device), lengths.to(device)
-
-            # Sort inputs by length and pack them to improve LSTM computation time.
-            lengths, sort_idxs = torch.sort(lengths, descending=True)
-            inputs, rewards, terminateds = inputs[sort_idxs], rewards[sort_idxs], terminateds[sort_idxs]
-            packed_inputs = pack_padded_sequence(inputs, lengths, batch_first=True, enforce_sorted=True)
-
+            # TODO: Pack the inputs to speed up LSTM time.
             # Pass inputs through LSTM. We receive padded outputs.
-            pred_obses, pred_rewards, pred_terminated, _, _ = lstm(packed_inputs)
-
+            pred_obses, pred_rewards, pred_terminated, _, _ = lstm(inputs)
             # Create a mask of the sequence lengths to get rid of the padding
             l_reward = mse(mask_tensor(pred_rewards, lengths), mask_tensor(rewards, lengths))
             obses = inputs[:, :, :12]
@@ -116,10 +125,15 @@ def train_lstm(lstm: LSTM, dataset: Dataset, epochs: int, batch_size: int, log_d
             total_obs_loss += l_obs.item() * n
             total_term_loss += l_term.item() * n
         
+        reward_losses.append(total_reward_loss / len(dataset))
+        obs_losses.append(total_obs_loss / len(dataset))
+        term_losses.append(total_term_loss / len(dataset))
         if log_dir:
             writer.add_scalar("reward loss", total_reward_loss / len(dataset), epoch)
             writer.add_scalar("z loss", total_obs_loss / len(dataset), epoch)
             writer.add_scalar("term loss", total_term_loss / len(dataset), epoch)
+
+    return reward_losses, obs_losses, term_losses
 
 
 def eval_lstm(lstm: LSTM, dataset: Dataset, device="mps"):
@@ -128,7 +142,8 @@ def eval_lstm(lstm: LSTM, dataset: Dataset, device="mps"):
     lstm.to(device)
 
     mse = torch.nn.MSELoss()
-    bce = torch.nn.BCELoss()
+    bce_scale = 100
+    bce = torch.nn.BCELoss(torch.tensor([bce_scale], device=device))
     total_reward_loss = 0
     total_obs_loss = 0
     total_term_loss = 0
@@ -156,17 +171,51 @@ def eval_lstm(lstm: LSTM, dataset: Dataset, device="mps"):
     print("Term loss:", total_term_loss / len(dataset))
 
 
+def test_gamma():
+    policy = RandomPolicy()
+    rollouts = collect_data(policy, 10000, 8, 200)
+
+    train_rollouts = rollouts[:8000]
+    test_rollouts = rollouts[8000:]
+
+    for gamma in [0.1, 0.25, 0.5, 0.75, 0.9]:
+        print(f"Gamma: {gamma}")
+        train_ds = LSTMDataset(train_rollouts, gamma=gamma)
+        lstm = LSTM(12, 1, 256)
+        train_lstm(lstm, train_ds, 100, 64, log_dir=None, device="cuda")
+        
+        eval_ds = LSTMDataset(test_rollouts, gamma=gamma)
+        eval_lstm(lstm, eval_ds, device="cuda")
+
+def test_hidden_sizes():
+    policy = RandomPolicy()
+    rollouts = collect_data(policy, 10000, 8, 200)
+
+    train_rollouts = rollouts[:8000]
+    test_rollouts = rollouts[8000:]
+
+    for hidden_size in [32, 64, 128, 256, 512]:
+        print(f"hidden size: {hidden_size}")
+        train_ds = LSTMDataset(train_rollouts, gamma=0.25)
+        lstm = LSTM(12, 1, 256)
+        train_lstm(lstm, train_ds, 100, 64, log_dir=None, device="cuda")
+        
+        eval_ds = LSTMDataset(test_rollouts, gamma=0.25)
+        eval_lstm(lstm, eval_ds, device="cuda")
+
 if __name__ == "__main__":
     lstm = LSTM(12, 1, 256)
     policy = RandomPolicy()
     rollouts = collect_data(policy, 10000, 8, 200)
-    dataset = LSTMDataset(rollouts, 0.1)
+    dataset = LSTMDataset(rollouts, gamma=0.25)
     train_ds, test_ds = torch.utils.data.random_split(dataset, [0.8, 0.2])
 
-    train_lstm(lstm, train_ds, 100, 64, log_dir="runs/fix-training")
+    reward_losses, obs_losses, term_losses = train_lstm(lstm, train_ds, 100, 64, log_dir=None, device="cuda")
+    for rew, obs, term in zip(reward_losses, obs_losses, term_losses):
+        print(f"Reward loss: {rew}, Z loss: {obs}, Term loss: {term}")
 
-    torch.save(lstm.state_dict(), "flappy/fixedlstm.pt")
+    torch.save(lstm.state_dict(), "flappy/lstm.pt")
 
     lstm = LSTM(12, 1, 256)
-    lstm.load_state_dict(torch.load("flappy/fixedlstm.pt", weights_only=True))
-    eval_lstm(lstm, test_ds)
+    lstm.load_state_dict(torch.load("flappy/lstm.pt", weights_only=True))
+    eval_lstm(lstm, test_ds, device="cuda")

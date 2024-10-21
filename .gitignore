@@ -8,7 +8,9 @@ results/
 runs/
 data/
 models/
+.venv/
 
+*.out
 *.pt
 *.npy
 *.npz

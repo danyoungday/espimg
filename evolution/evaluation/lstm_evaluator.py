@@ -6,101 +6,36 @@ import torch
 from evolution.candidate import Candidate
 from evolution.evaluation.evaluator import Evaluator
 from lstm.lstmmodel import LSTM
-from flappy.data import CandidatePolicy, collect_data
+from flappy.data import Policy, RandomPolicy, CandidatePolicy, collect_data, Rollout
 from flappy.train import train_lstm, LSTMDataset
-
-
-class LSTMEnv:
-    def __init__(self, lstm: LSTM, env: gymnasium.Env, device="cpu"):
-        self.lstm = lstm
-        self.lstm.to(device)
-        self.lstm.eval()
-
-        self.device = device
-
-        self.env = env  # Used to handle initial state
-        self.state = None
-        self.h, self.c = None, None
-
-    def reset(self, seed=None):
-        self.h, self.c = None, None
-        obs, info = self.env.reset(seed=seed)
-        self.state = torch.tensor(obs, dtype=torch.float32).unsqueeze(0).unsqueeze(1).to(self.device)
-        return self.state
-
-    def step(self, action):
-        inp = torch.cat((self.state, action), dim=2)
-        self.state, rt, termt, self.h, self.c = self.lstm(inp, self.h, self.c)
-
-        termt = (termt > 0.5).bool().item()
-
-        return self.state, rt, termt
-    
-class LSTMVecEnv:
-    """
-    'Vectorized' version of the LSTM Env. Just batches the observations through the LSTM.
-    """
-    def __init__(self, lstm: LSTM, env: gymnasium.Env, num_envs: int, device="cpu"):
-        self.lstm = lstm
-        self.lstm.to(device)
-        self.lstm.eval()
-
-        self.device = device
-
-        self.n_envs = num_envs
-        self.env = env
-        self.state = None
-        self.h, self.c = None, None
-
-    def reset(self, seed=None):
-        """
-        obses: (n_envs, D)
-        self.state: (n_envs, 1, D) where 1 is T
-        """
-        if seed is None:
-            seed = np.random.randint(0, 2**32-1, self.n_envs)
-
-        self.h, self.c = None, None
-        obses = []
-        for s in seed:
-            obs, info = self.env.reset(seed=int(s))
-            obses.append(obs)
-        obses = np.array(obses)
-        self.state = torch.tensor(obses, dtype=torch.float32).unsqueeze(1).to(self.device)
-        return self.state
-    
-    def step(self, actions):
-        """
-        actions: (n_envs, 1, 1)
-        inp: (n_envs, 1, D+1)
-        """
-        with torch.no_grad():
-            inp = torch.cat([self.state, actions], dim=2)
-            self.state, rt, termt, self.h, self.c = self.lstm(inp, self.h, self.c)
-            termt = (termt > 0.5).bool()
-        return self.state, rt, termt
+from flappy.env import LSTMVecEnv
 
 class LSTMEvaluator(Evaluator):
     """
     Evaluates candidates in the LSTM world model.
     We draw a sample from the true env and use it to start the LSTM.
     """
-    def __init__(self, n_steps=500, n_envs=32, device="cpu", log_path=None):
-        lstm = LSTM(12, 1, 256)
-        # rollouts = collect_data(1000, 8, 100)
-        # dataset = LSTMDataset(rollouts)
-        # train_lstm(lstm, dataset, 100, 64)
-        self.device = device
-        lstm.load_state_dict(torch.load("flappy/fixedlstm.pt", weights_only=True))
-        lstm.to(device)
-        lstm.eval()
-
+    def __init__(self, epochs=100,
+                 n_rollouts=1000,
+                 n_steps=500,
+                 n_envs=32,
+                 gamma=0.25,
+                 prune=0.9,
+                 device="cpu",
+                 log_path=None):
+        self.epochs = epochs
+        self.gamma = gamma
+        self.prune = prune
+        self.n_rollouts = n_rollouts
         self.n_steps = n_steps
         self.n_envs = n_envs
         self.env = gymnasium.make("FlappyBird-v0", use_lidar=False)
-        self.lstm_env = LSTMVecEnv(lstm, self.env, num_envs=self.n_envs, device=device)
-
+        self.device = device
         self.log_path = log_path
+
+        # All rollouts is a list of each generation of rollouts
+        self.all_rollouts = [self.collect_rollouts([RandomPolicy()])]
+        self.lstm_env = self.train(self.all_rollouts[0])
 
     def evaluate_candidate(self, candidate: Candidate):
         """
@@ -125,27 +60,62 @@ class LSTMEvaluator(Evaluator):
         total_reward = total_rewards.mean().item()
         candidate.metrics["reward"] = total_reward
 
-    def retrain_lstm(self, candidates: list[Candidate], n_rollouts: int, n_steps: int, n_envs: int):
-        assert n_rollouts % len(candidates) == 0
-        all_rollouts = []
-        for candidate in candidates:
-            policy = CandidatePolicy(candidate)
-            rollouts = collect_data(policy, n_rollouts // len(candidates), n_envs=n_envs, n_steps=n_steps)
-            all_rollouts.extend(rollouts)
+    def collect_rollouts(self, policies: list[Policy]) -> list[Rollout]:
+        assert self.n_rollouts % len(policies) == 0
+        rollouts = []
+        for policy in policies:
+            rollouts.extend(collect_data(policy, self.n_rollouts // len(policies), n_envs=8, n_steps=self.n_steps))
 
         # Log the rewards of the collected rollouts
         if self.log_path:
-            rewards = np.array([np.mean(rollout.rewards) for rollout in all_rollouts])
-            rewards = rewards.view(len(candidates), n_rollouts // len(candidates))
-            cand_rewards = np.mean(rewards, axis=1)
+            rewards = torch.FloatTensor([torch.mean(rollout.rewards) for rollout in rollouts])
+            rewards = rewards.view(len(policies), self.n_rollouts // len(policies))
+            cand_rewards = torch.mean(rewards, dim=1)
             cand_rewards = cand_rewards.tolist()
             with open(self.log_path, "a", encoding="utf-8") as f:
                 f.write(f"{cand_rewards}\n")
 
-        # TODO: un-hardcode gamma
-        dataset = LSTMDataset(all_rollouts, gamma=0.1)
+        return rollouts
+    
+    def prune_data(self, all_rollouts: list[list[Rollout]], prune: float) -> list[Rollout]:
+        """
+        Reduces the length of each list of rollout by a factor of prune.
+        We just chop off the end which is the same as randomly doing it.
+        """
+        pruned_rollouts = []
+        for rollout_list in all_rollouts:
+            pruned_rollouts.append(rollout_list[:int(len(rollout_list) * prune)])
+        return pruned_rollouts
+
+    def train(self, rollouts: list[Rollout]):
+        """
+        Retrains LSTM with rollouts
+        """
+        dataset = LSTMDataset(rollouts, gamma=self.gamma)
         new_lstm = LSTM(12, 1, 256)
-        train_lstm(new_lstm, dataset, 100, 64, None, device="mps")
+        rew_loss, obs_loss, term_loss = train_lstm(new_lstm, dataset, self.epochs, 64, None, device=self.device)
+        print(f"Reward loss: {rew_loss[-1]}, Z loss: {obs_loss[-1]}, Term loss: {term_loss[-1]}")
         new_lstm.to(self.device)
         new_lstm.eval()
-        self.lstm_env = LSTMVecEnv(new_lstm, self.env, self.n_envs, device=self.device)
+        lstm_env = LSTMVecEnv(new_lstm, self.env, self.n_envs, device=self.device)
+        return lstm_env
+    
+    def retrain_lstm(self, candidates: list[Candidate]):
+        """
+        Retrains lstm on a set of candidates.
+        First converts them to a policy and collects data from them.
+        Then prunes the old data and appends the new data to the old data.
+        Finally retrains the lstm on the total dataset.
+        """
+        # Convert candidates into policies that collect_data can read
+        policies = [CandidatePolicy(c) for c in candidates]
+        # Collect a generation of rollouts from the real world
+        rollouts = self.collect_rollouts(policies)
+        # Prune each old generation of rollouts
+        self.all_rollouts = self.prune_data(self.all_rollouts, self.prune)
+        # Append the current generation of rollouts to the list of generations of rollouts
+        self.all_rollouts.append(rollouts)
+        # Flatten the list of generations of rollouts into a list of all rollouts
+        train_rollouts = [rollout for rollout_list in self.all_rollouts for rollout in rollout_list]
+        print(f"Training on {len(train_rollouts)} rollouts")
+        self.lstm_env = self.train(train_rollouts)

@@ -22,9 +22,10 @@ class Policy:
     def act(self, obs: np.ndarray) -> np.ndarray:
         raise NotImplementedError
     
+
 class RandomPolicy(Policy):
     def act(self, obses: np.ndarray) -> np.ndarray:
-        return np.random.choice([0, 1], (obses.shape[0],), p=[0.9, 0.1])
+        return np.random.choice([0, 1], (obses.shape[0], 1), p=[0.9, 0.1])
     
 
 class CandidatePolicy(Policy):
@@ -70,7 +71,6 @@ def collect_data(policy: Policy, n_rollouts: int, n_envs: int, n_steps: int) -> 
             # Next action:
             # (feed the observation to your agent here)
             actions = policy.act(obses)
-
             # Processing:
             next_obses, rewards, terminateds, _, infos = env.step(actions)
 

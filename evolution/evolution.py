@@ -48,7 +48,14 @@ class Evolution():
         self.model_params = config["model_params"]
         self.outcomes = config["outcomes"]
 
-        self.evaluator = LSTMEvaluator(n_steps=200, n_envs=256, device="mps", log_path=self.save_path / "rewards.txt")
+        self.evaluator = LSTMEvaluator(epochs=100,
+                                       n_rollouts=10000,
+                                       n_steps=200,
+                                       n_envs=256,
+                                       prune=0.9,
+                                       gamma=0.25,
+                                       device="cuda",
+                                       log_path=self.save_path / "rewards.txt")
         # self.evaluator = RealEvaluator()
 
     def make_new_pop(self, candidates: list[Candidate], n: int, gen: int) -> list[Candidate]:
@@ -132,7 +139,7 @@ class Evolution():
             self.record_gen_results(gen, sorted_parents)
 
             # Retrain predictor on new rollouts
-            self.evaluator.retrain_lstm(sorted_parents[:keep], 10000, 200, 8)
+            self.evaluator.retrain_lstm(sorted_parents[:keep])
 
 
         return sorted_parents

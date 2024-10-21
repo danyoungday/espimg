@@ -15,9 +15,15 @@ class LSTM(torch.nn.Module):
     def __init__(self, latent_dim, action_dim, hidden_size):
         super().__init__()
         self.lstm = torch.nn.LSTM(latent_dim + action_dim, hidden_size, batch_first=True)
-        self.reward_fc = torch.nn.Linear(hidden_size, 1)
+        self.reward_fc = torch.nn.Sequential(
+            torch.nn.Linear(hidden_size, 64),
+            torch.nn.ReLU(),
+            torch.nn.Linear(64, 1)
+        )
         self.term_fc = torch.nn.Sequential(
-            torch.nn.Linear(hidden_size, 1),
+            torch.nn.Linear(hidden_size, 64),
+            torch.nn.ReLU(),
+            torch.nn.Linear(64, 1),
             torch.nn.Sigmoid()
         )
         self.latent_fc = torch.nn.Sequential(
